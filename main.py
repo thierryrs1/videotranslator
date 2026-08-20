@@ -7,6 +7,7 @@ import edge_tts
 import asyncio
 import subprocess
 import imageio_ffmpeg
+from moviepy.editor import AudioFileClip, CompositeAudioClip
 
 def format_time(seconds):
     hours = int(seconds // 3600)
@@ -57,6 +58,16 @@ class VideoTranslatorApp(ctk.CTk):
         )
         self.voice_dropdown.grid(row=2, column=0, padx=20, pady=(0, 15))
 
+        self.subtitle_var = ctk.BooleanVar(value=True)
+        self.subtitle_checkbox = ctk.CTkCheckBox(
+            self.main_frame,
+            text="Adicionar Legendas (queimadas no vídeo)",
+            variable=self.subtitle_var,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            text_color="#333333"
+        )
+        self.subtitle_checkbox.grid(row=3, column=0, padx=20, pady=(0, 15))
+
         self.select_btn = ctk.CTkButton(
             self.main_frame, 
             text="Selecionar Vídeo", 
@@ -66,7 +77,7 @@ class VideoTranslatorApp(ctk.CTk):
             fg_color="#0A6ED1",
             hover_color="#0854A0"
         )
-        self.select_btn.grid(row=3, column=0, padx=20, pady=10)
+        self.select_btn.grid(row=4, column=0, padx=20, pady=10)
         
         self.file_label = ctk.CTkLabel(
             self.main_frame, 
@@ -74,7 +85,7 @@ class VideoTranslatorApp(ctk.CTk):
             text_color="#666666",
             font=ctk.CTkFont(family="Segoe UI", size=12)
         )
-        self.file_label.grid(row=4, column=0, padx=20, pady=5)
+        self.file_label.grid(row=5, column=0, padx=20, pady=5)
         
         self.process_btn = ctk.CTkButton(
             self.main_frame, 
@@ -86,7 +97,7 @@ class VideoTranslatorApp(ctk.CTk):
             fg_color="#0A6ED1",
             hover_color="#0854A0"
         )
-        self.process_btn.grid(row=5, column=0, padx=20, pady=20)
+        self.process_btn.grid(row=6, column=0, padx=20, pady=20)
         
         self.status_label = ctk.CTkLabel(
             self.main_frame, 
@@ -94,10 +105,10 @@ class VideoTranslatorApp(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color="#002D5A"
         )
-        self.status_label.grid(row=6, column=0, padx=20, pady=5)
+        self.status_label.grid(row=7, column=0, padx=20, pady=5)
         
         self.progress_bar = ctk.CTkProgressBar(self.main_frame, mode="determinate")
-        self.progress_bar.grid(row=7, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.progress_bar.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="ew")
         self.progress_bar.set(0)
         self.progress_bar.grid_remove() # Oculta inicialmente
         
@@ -157,7 +168,7 @@ class VideoTranslatorApp(ctk.CTk):
                     text = segment['text'].strip()
                     f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
             
-            self.update_progress(0.7, "Gerando áudio dublado...")
+            self.update_progress(0.6, "Sincronizando e gerando áudio dublado por segmento...")
             voices = {
                 "Masculino (Guy)": "en-US-GuyNeural",
                 "Masculino (Christopher)": "en-US-ChristopherNeural",
@@ -166,32 +177,70 @@ class VideoTranslatorApp(ctk.CTk):
             }
             selected_voice = voices.get(self.voice_var.get(), "en-US-GuyNeural")
             
-            communicate = edge_tts.Communicate(translated_text, selected_voice)
-            asyncio.run(communicate.save(eng_audio_path))
+            audio_clips = []
+            temp_files = []
             
-            self.update_progress(0.9, "Juntando áudio e legendas ao vídeo...")
+            for i, segment in enumerate(result['segments']):
+                seg_text = segment['text'].strip()
+                if not seg_text:
+                    continue
+                
+                seg_audio_path = os.path.join(output_dir, f"{base_name}_temp_seg_{i}.mp3")
+                temp_files.append(seg_audio_path)
+                
+                communicate = edge_tts.Communicate(seg_text, selected_voice)
+                asyncio.run(communicate.save(seg_audio_path))
+                
+                try:
+                    clip = AudioFileClip(seg_audio_path).set_start(segment['start'])
+                    audio_clips.append(clip)
+                except Exception:
+                    pass
             
-            # Usar ffmpeg para juntar vídeo, novo áudio e queimar a legenda na imagem
+            self.update_progress(0.8, "Juntando áudio e gerando vídeo final...")
+            
+            if audio_clips:
+                final_audio = CompositeAudioClip(audio_clips)
+                final_audio.write_audiofile(eng_audio_path, logger=None)
+                final_audio.close()
+                for c in audio_clips:
+                    c.close()
+            else:
+                raise Exception("Nenhuma fala detectada para dublar.")
+            
+            # Usar ffmpeg para juntar vídeo, novo áudio e, se marcado, queimar a legenda na imagem
             srt_filename = os.path.basename(srt_path)
             cmd = [
                 ffmpeg_cmd, "-y", 
                 "-i", os.path.basename(self.video_path), 
                 "-i", os.path.basename(eng_audio_path),
                 "-c:v", "libx264", 
-                "-c:a", "aac", 
-                "-vf", f"subtitles={srt_filename}:force_style='FontSize=18,PrimaryColour=&Hffffff,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=0'",
+                "-c:a", "aac"
+            ]
+            
+            if self.subtitle_var.get():
+                cmd.extend(["-vf", f"subtitles={srt_filename}:force_style='FontSize=18,PrimaryColour=&Hffffff,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=0'"])
+                
+            cmd.extend([
                 "-map", "0:v:0", "-map", "1:a:0",
                 os.path.basename(final_video_path)
-            ]
+            ])
             
             try:
                 subprocess.run(cmd, cwd=output_dir, check=True, capture_output=True, text=True)
             except subprocess.CalledProcessError as e:
-                raise Exception(f"Erro ao legendar vídeo: {e.stderr}")
+                raise Exception(f"Erro ao gerar vídeo final: {e.stderr}")
             
+            # Limpeza de arquivos temporários
             if os.path.exists(audio_path): os.remove(audio_path)
             if os.path.exists(eng_audio_path): os.remove(eng_audio_path)
             if os.path.exists(srt_path): os.remove(srt_path)
+            for f in temp_files:
+                if os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
             
             self.update_progress(1.0, "Concluído! Vídeo salvo na mesma pasta.")
             messagebox.showinfo("Sucesso", f"Vídeo dublado salvo em:\n{final_video_path}")
