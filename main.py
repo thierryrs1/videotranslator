@@ -164,12 +164,23 @@ class VideoTranslatorApp(ctk.CTk):
         threading.Thread(target=self.process_video, daemon=True).start()
         
     def process_video(self):
+        audio_path = ""
+        eng_audio_path = ""
+        srt_path = ""
+        temp_files = []
         try:
             output_dir = os.path.dirname(self.video_path)
             base_name = os.path.splitext(os.path.basename(self.video_path))[0]
-            audio_path = os.path.join(output_dir, f"{base_name}_temp_audio.wav")
-            eng_audio_path = os.path.join(output_dir, f"{base_name}_eng_audio.mp3")
-            srt_path = os.path.join(output_dir, f"temp_subs.srt")
+            
+            import tempfile, uuid
+            temp_dir = tempfile.gettempdir()
+            uid = uuid.uuid4().hex[:6]
+            
+            audio_path = os.path.join(temp_dir, f"{base_name}_{uid}_temp_audio.wav")
+            eng_audio_path = os.path.join(temp_dir, f"{base_name}_{uid}_eng_audio.mp3")
+            
+            # SRT continua na pasta do vídeo pois o FFmpeg tem bugs com caminhos absolutos no Windows
+            srt_path = os.path.join(output_dir, f"{base_name}_{uid}_subs.srt")
             final_video_path = os.path.join(output_dir, f"{base_name}_dubbed.mp4")
 
             ffmpeg_cmd = imageio_ffmpeg.get_ffmpeg_exe()
@@ -205,14 +216,13 @@ class VideoTranslatorApp(ctk.CTk):
             selected_voice = voices.get(self.voice_var.get(), "en-US-GuyNeural")
             
             audio_clips = []
-            temp_files = []
             
             for i, segment in enumerate(result['segments']):
                 seg_text = segment['text'].strip()
                 if not seg_text:
                     continue
                 
-                seg_audio_path = os.path.join(output_dir, f"{base_name}_temp_seg_{i}.mp3")
+                seg_audio_path = os.path.join(temp_dir, f"{base_name}_{uid}_seg_{i}.mp3")
                 temp_files.append(seg_audio_path)
                 
                 communicate = edge_tts.Communicate(seg_text, selected_voice)
@@ -258,25 +268,29 @@ class VideoTranslatorApp(ctk.CTk):
             except subprocess.CalledProcessError as e:
                 raise Exception(f"Erro ao gerar vídeo final: {e.stderr}")
             
-            # Limpeza de arquivos temporários
-            if os.path.exists(audio_path): os.remove(audio_path)
-            if os.path.exists(eng_audio_path): os.remove(eng_audio_path)
-            if os.path.exists(srt_path): os.remove(srt_path)
-            for f in temp_files:
-                if os.path.exists(f):
-                    try:
-                        os.remove(f)
-                    except:
-                        pass
-            
             self.update_progress(1.0, "Concluído! Vídeo salvo na mesma pasta.")
             messagebox.showinfo("Sucesso", f"Vídeo dublado salvo em:\n{final_video_path}")
             
         except Exception as e:
             self.update_progress(0, f"Erro: {str(e)}")
-            messagebox.showerror("Erro", f"Ocorreu um erro:\n{str(e)}\n\nLembre-se de ter o FFmpeg instalado.")
+            messagebox.showerror("Erro", f"Ocorreu um erro:\n{str(e)}")
             
         finally:
+            # Limpeza GARANTIDA de arquivos temporários, mesmo se der erro
+            if os.path.exists(audio_path): 
+                try: os.remove(audio_path)
+                except: pass
+            if os.path.exists(eng_audio_path): 
+                try: os.remove(eng_audio_path)
+                except: pass
+            if os.path.exists(srt_path): 
+                try: os.remove(srt_path)
+                except: pass
+            for f in temp_files:
+                if os.path.exists(f):
+                    try: os.remove(f)
+                    except: pass
+                    
             self.process_btn.configure(state="normal")
             self.select_btn.configure(state="normal")
 
