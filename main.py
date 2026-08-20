@@ -249,8 +249,8 @@ class VideoTranslatorApp(ctk.CTk):
             srt_filename = os.path.basename(srt_path)
             cmd = [
                 ffmpeg_cmd, "-y", 
-                "-i", os.path.basename(self.video_path), 
-                "-i", os.path.basename(eng_audio_path),
+                "-i", self.video_path, 
+                "-i", eng_audio_path,
                 "-c:v", "libx264", 
                 "-c:a", "aac"
             ]
@@ -260,7 +260,7 @@ class VideoTranslatorApp(ctk.CTk):
                 
             cmd.extend([
                 "-map", "0:v:0", "-map", "1:a:0",
-                os.path.basename(final_video_path)
+                final_video_path
             ])
             
             try:
