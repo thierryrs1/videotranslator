@@ -8,6 +8,33 @@ import asyncio
 import subprocess
 import imageio_ffmpeg
 from moviepy.editor import AudioFileClip, CompositeAudioClip
+import numpy as np
+
+# --- PATCH WHISPER PARA SER PORTABLE (NÃO EXIGIR FFMPEG NO SISTEMA DO USUÁRIO) ---
+import whisper.audio
+
+def patched_load_audio(file: str, sr: int = 16000):
+    ffmpeg_cmd = imageio_ffmpeg.get_ffmpeg_exe()
+    try:
+        cmd = [
+            ffmpeg_cmd,
+            "-nostdin",
+            "-threads", "0",
+            "-i", file,
+            "-f", "s16le",
+            "-ac", "1",
+            "-acodec", "pcm_s16le",
+            "-ar", str(sr),
+            "-"
+        ]
+        out = subprocess.run(cmd, capture_output=True, check=True).stdout
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to load audio: {e.stderr.decode()}") from e
+    
+    return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+
+whisper.audio.load_audio = patched_load_audio
+# --------------------------------------------------------------------------------
 
 def format_time(seconds):
     hours = int(seconds // 3600)
