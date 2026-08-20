@@ -1,0 +1,5 @@
+customtkinter
+moviepy
+openai-whisper
+gTTS
+pyinstaller
