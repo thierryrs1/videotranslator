@@ -3,7 +3,8 @@ import threading
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import whisper
-from gtts import gTTS
+import edge_tts
+import asyncio
 from moviepy.editor import VideoFileClip, AudioFileClip
 
 ctk.set_appearance_mode("Light")  
@@ -75,7 +76,12 @@ class VideoTranslatorApp(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color="#002D5A"
         )
-        self.status_label.grid(row=5, column=0, padx=20, pady=10)
+        self.status_label.grid(row=5, column=0, padx=20, pady=5)
+        
+        self.progress_bar = ctk.CTkProgressBar(self.main_frame, mode="determinate")
+        self.progress_bar.grid(row=6, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.progress_bar.set(0)
+        self.progress_bar.grid_remove() # Oculta inicialmente
         
         self.video_path = None
 
@@ -95,7 +101,9 @@ class VideoTranslatorApp(ctk.CTk):
             
         self.process_btn.configure(state="disabled")
         self.select_btn.configure(state="disabled")
-        self.status_label.configure(text="Iniciando processamento...")
+        self.progress_bar.grid() # Mostra a barra de progresso
+        self.progress_bar.set(0)
+        self.update_progress(0, "Iniciando processamento...")
         
         threading.Thread(target=self.process_video, daemon=True).start()
         
@@ -107,22 +115,24 @@ class VideoTranslatorApp(ctk.CTk):
             eng_audio_path = os.path.join(output_dir, f"{base_name}_eng_audio.mp3")
             final_video_path = os.path.join(output_dir, f"{base_name}_dubbed.mp4")
 
-            self.update_status("Extraindo áudio do vídeo...")
+            self.update_progress(0.1, "Extraindo áudio do vídeo...")
             video = VideoFileClip(self.video_path)
             video.audio.write_audiofile(audio_path, logger=None)
             
-            self.update_status("Carregando modelo de IA (pode demorar no primeiro uso)...")
+            self.update_progress(0.2, "Carregando modelo de IA (pode demorar no primeiro uso)...")
             model = whisper.load_model("base")
             
-            self.update_status("Transcrevendo e traduzindo para o inglês...")
+            self.update_progress(0.5, "Transcrevendo e traduzindo para o inglês...")
             result = model.transcribe(audio_path, task="translate")
             translated_text = result["text"]
             
-            self.update_status("Gerando áudio dublado (Inglês)...")
-            tts = gTTS(text=translated_text, lang='en', slow=False)
-            tts.save(eng_audio_path)
+            self.update_progress(0.7, "Gerando áudio dublado (Voz Neural de Alta Qualidade)...")
+            # Usando Edge TTS para uma voz realista, nativa e humana.
+            # O ChristopherNeural eh uma voz masculina americana bem natural.
+            communicate = edge_tts.Communicate(translated_text, "en-US-ChristopherNeural")
+            asyncio.run(communicate.save(eng_audio_path))
             
-            self.update_status("Juntando novo áudio com o vídeo...")
+            self.update_progress(0.9, "Juntando novo áudio com o vídeo...")
             new_audio = AudioFileClip(eng_audio_path)
             final_video = video.set_audio(new_audio)
             final_video.write_videofile(final_video_path, codec="libx264", audio_codec="aac", logger=None)
@@ -134,19 +144,20 @@ class VideoTranslatorApp(ctk.CTk):
             if os.path.exists(audio_path): os.remove(audio_path)
             if os.path.exists(eng_audio_path): os.remove(eng_audio_path)
             
-            self.update_status("Concluído! Vídeo salvo na mesma pasta.")
+            self.update_progress(1.0, "Concluído! Vídeo salvo na mesma pasta.")
             messagebox.showinfo("Sucesso", f"Vídeo dublado salvo em:\n{final_video_path}")
             
         except Exception as e:
-            self.update_status(f"Erro: {str(e)}")
+            self.update_progress(0, f"Erro: {str(e)}")
             messagebox.showerror("Erro", f"Ocorreu um erro:\n{str(e)}\n\nLembre-se de ter o FFmpeg instalado.")
             
         finally:
             self.process_btn.configure(state="normal")
             self.select_btn.configure(state="normal")
 
-    def update_status(self, text):
+    def update_progress(self, value, text):
         self.status_label.configure(text=text)
+        self.progress_bar.set(value)
 
 if __name__ == "__main__":
     app = VideoTranslatorApp()
