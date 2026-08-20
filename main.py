@@ -5,7 +5,15 @@ from tkinter import filedialog, messagebox
 import whisper
 import edge_tts
 import asyncio
-from moviepy.editor import VideoFileClip, AudioFileClip
+import subprocess
+import imageio_ffmpeg
+
+def format_time(seconds):
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    millis = int((secs - int(secs)) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{int(secs):02d},{millis:03d}"
 
 ctk.set_appearance_mode("Light")  
 ctk.set_default_color_theme("blue")  # Clean interface, similar to SAP Fiori concepts
@@ -37,8 +45,18 @@ class VideoTranslatorApp(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=14),
             text_color="#333333"
         )
-        self.desc_label.grid(row=1, column=0, padx=20, pady=(0, 30))
+        self.desc_label.grid(row=1, column=0, padx=20, pady=(0, 15))
         
+        self.voice_var = ctk.StringVar(value="Masculino (Guy)")
+        self.voice_dropdown = ctk.CTkOptionMenu(
+            self.main_frame,
+            values=["Masculino (Guy)", "Masculino (Christopher)", "Feminino (Aria)", "Feminino (Jenny)"],
+            variable=self.voice_var,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            fg_color="#0A6ED1"
+        )
+        self.voice_dropdown.grid(row=2, column=0, padx=20, pady=(0, 15))
+
         self.select_btn = ctk.CTkButton(
             self.main_frame, 
             text="Selecionar Vídeo", 
@@ -48,7 +66,7 @@ class VideoTranslatorApp(ctk.CTk):
             fg_color="#0A6ED1",
             hover_color="#0854A0"
         )
-        self.select_btn.grid(row=2, column=0, padx=20, pady=10)
+        self.select_btn.grid(row=3, column=0, padx=20, pady=10)
         
         self.file_label = ctk.CTkLabel(
             self.main_frame, 
@@ -56,7 +74,7 @@ class VideoTranslatorApp(ctk.CTk):
             text_color="#666666",
             font=ctk.CTkFont(family="Segoe UI", size=12)
         )
-        self.file_label.grid(row=3, column=0, padx=20, pady=5)
+        self.file_label.grid(row=4, column=0, padx=20, pady=5)
         
         self.process_btn = ctk.CTkButton(
             self.main_frame, 
@@ -68,7 +86,7 @@ class VideoTranslatorApp(ctk.CTk):
             fg_color="#0A6ED1",
             hover_color="#0854A0"
         )
-        self.process_btn.grid(row=4, column=0, padx=20, pady=20)
+        self.process_btn.grid(row=5, column=0, padx=20, pady=20)
         
         self.status_label = ctk.CTkLabel(
             self.main_frame, 
@@ -76,10 +94,10 @@ class VideoTranslatorApp(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color="#002D5A"
         )
-        self.status_label.grid(row=5, column=0, padx=20, pady=5)
+        self.status_label.grid(row=6, column=0, padx=20, pady=5)
         
         self.progress_bar = ctk.CTkProgressBar(self.main_frame, mode="determinate")
-        self.progress_bar.grid(row=6, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.progress_bar.grid(row=7, column=0, padx=20, pady=(0, 20), sticky="ew")
         self.progress_bar.set(0)
         self.progress_bar.grid_remove() # Oculta inicialmente
         
@@ -113,36 +131,67 @@ class VideoTranslatorApp(ctk.CTk):
             base_name = os.path.splitext(os.path.basename(self.video_path))[0]
             audio_path = os.path.join(output_dir, f"{base_name}_temp_audio.wav")
             eng_audio_path = os.path.join(output_dir, f"{base_name}_eng_audio.mp3")
+            srt_path = os.path.join(output_dir, f"temp_subs.srt")
             final_video_path = os.path.join(output_dir, f"{base_name}_dubbed.mp4")
 
+            ffmpeg_cmd = imageio_ffmpeg.get_ffmpeg_exe()
+
             self.update_progress(0.1, "Extraindo áudio do vídeo...")
-            video = VideoFileClip(self.video_path)
-            video.audio.write_audiofile(audio_path, logger=None)
+            try:
+                subprocess.run([ffmpeg_cmd, "-y", "-i", self.video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", audio_path], check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                raise Exception(f"Erro ao extrair áudio: {e.stderr}")
             
             self.update_progress(0.2, "Carregando modelo de IA (pode demorar no primeiro uso)...")
             model = whisper.load_model("base")
             
-            self.update_progress(0.5, "Transcrevendo e traduzindo para o inglês...")
+            self.update_progress(0.4, "Transcrevendo e gerando legendas...")
             result = model.transcribe(audio_path, task="translate")
             translated_text = result["text"]
             
-            self.update_progress(0.7, "Gerando áudio dublado (Voz Neural de Alta Qualidade)...")
-            # Usando Edge TTS para uma voz realista, nativa e humana.
-            # O ChristopherNeural eh uma voz masculina americana bem natural.
-            communicate = edge_tts.Communicate(translated_text, "en-US-ChristopherNeural")
+            # Criar arquivo SRT para as legendas
+            with open(srt_path, 'w', encoding='utf-8') as f:
+                for i, segment in enumerate(result['segments'], start=1):
+                    start = format_time(segment['start'])
+                    end = format_time(segment['end'])
+                    text = segment['text'].strip()
+                    f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+            
+            self.update_progress(0.7, "Gerando áudio dublado...")
+            voices = {
+                "Masculino (Guy)": "en-US-GuyNeural",
+                "Masculino (Christopher)": "en-US-ChristopherNeural",
+                "Feminino (Aria)": "en-US-AriaNeural",
+                "Feminino (Jenny)": "en-US-JennyNeural"
+            }
+            selected_voice = voices.get(self.voice_var.get(), "en-US-GuyNeural")
+            
+            communicate = edge_tts.Communicate(translated_text, selected_voice)
             asyncio.run(communicate.save(eng_audio_path))
             
-            self.update_progress(0.9, "Juntando novo áudio com o vídeo...")
-            new_audio = AudioFileClip(eng_audio_path)
-            final_video = video.set_audio(new_audio)
-            final_video.write_videofile(final_video_path, codec="libx264", audio_codec="aac", logger=None)
+            self.update_progress(0.9, "Juntando áudio e legendas ao vídeo...")
             
-            video.close()
-            final_video.close()
-            new_audio.close()
+            # Usar ffmpeg para juntar vídeo, novo áudio e queimar a legenda na imagem
+            srt_filename = os.path.basename(srt_path)
+            cmd = [
+                ffmpeg_cmd, "-y", 
+                "-i", os.path.basename(self.video_path), 
+                "-i", os.path.basename(eng_audio_path),
+                "-c:v", "libx264", 
+                "-c:a", "aac", 
+                "-vf", f"subtitles={srt_filename}:force_style='FontSize=18,PrimaryColour=&Hffffff,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=0'",
+                "-map", "0:v:0", "-map", "1:a:0",
+                os.path.basename(final_video_path)
+            ]
+            
+            try:
+                subprocess.run(cmd, cwd=output_dir, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                raise Exception(f"Erro ao legendar vídeo: {e.stderr}")
             
             if os.path.exists(audio_path): os.remove(audio_path)
             if os.path.exists(eng_audio_path): os.remove(eng_audio_path)
+            if os.path.exists(srt_path): os.remove(srt_path)
             
             self.update_progress(1.0, "Concluído! Vídeo salvo na mesma pasta.")
             messagebox.showinfo("Sucesso", f"Vídeo dublado salvo em:\n{final_video_path}")
