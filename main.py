@@ -88,7 +88,7 @@ class VideoTranslatorApp(ctk.CTk):
         self.subtitle_var = ctk.BooleanVar(value=True)
         self.subtitle_checkbox = ctk.CTkCheckBox(
             self.main_frame,
-            text="Adicionar Legendas (queimadas no vídeo)",
+            text="Gerar arquivo de Legenda (.srt) solto na pasta",
             variable=self.subtitle_var,
             font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color="#333333"
@@ -166,11 +166,14 @@ class VideoTranslatorApp(ctk.CTk):
     def process_video(self):
         audio_path = ""
         eng_audio_path = ""
-        srt_path = ""
         temp_files = []
         try:
             output_dir = os.path.dirname(self.video_path)
             base_name = os.path.splitext(os.path.basename(self.video_path))[0]
+            
+            # Criar pasta dedicada para os arquivos finais
+            result_dir = os.path.join(output_dir, f"{base_name}_Dublado")
+            os.makedirs(result_dir, exist_ok=True)
             
             import tempfile, uuid
             temp_dir = tempfile.gettempdir()
@@ -179,9 +182,8 @@ class VideoTranslatorApp(ctk.CTk):
             audio_path = os.path.join(temp_dir, f"{base_name}_{uid}_temp_audio.wav")
             eng_audio_path = os.path.join(temp_dir, f"{base_name}_{uid}_eng_audio.mp3")
             
-            # SRT continua na pasta do vídeo pois o FFmpeg tem bugs com caminhos absolutos no Windows
-            srt_path = os.path.join(output_dir, f"{base_name}_{uid}_subs.srt")
-            final_video_path = os.path.join(output_dir, f"{base_name}_dubbed.mp4")
+            final_srt_path = os.path.join(result_dir, f"{base_name}.srt")
+            final_video_path = os.path.join(result_dir, f"{base_name}.mp4")
 
             ffmpeg_cmd = imageio_ffmpeg.get_ffmpeg_exe()
 
@@ -198,13 +200,14 @@ class VideoTranslatorApp(ctk.CTk):
             result = model.transcribe(audio_path, task="translate")
             translated_text = result["text"]
             
-            # Criar arquivo SRT para as legendas
-            with open(srt_path, 'w', encoding='utf-8') as f:
-                for i, segment in enumerate(result['segments'], start=1):
-                    start = format_time(segment['start'])
-                    end = format_time(segment['end'])
-                    text = segment['text'].strip()
-                    f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+            # Criar arquivo SRT para as legendas caso a flag esteja ativada
+            if self.subtitle_var.get():
+                with open(final_srt_path, 'w', encoding='utf-8') as f:
+                    for i, segment in enumerate(result['segments'], start=1):
+                        start = format_time(segment['start'])
+                        end = format_time(segment['end'])
+                        text = segment['text'].strip()
+                        f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
             
             self.update_progress(0.6, "Sincronizando e gerando áudio dublado por segmento...")
             voices = {
@@ -245,31 +248,24 @@ class VideoTranslatorApp(ctk.CTk):
             else:
                 raise Exception("Nenhuma fala detectada para dublar.")
             
-            # Usar ffmpeg para juntar vídeo, novo áudio e, se marcado, queimar a legenda na imagem
-            srt_filename = os.path.basename(srt_path)
+            # Usar ffmpeg para juntar vídeo e novo áudio
             cmd = [
                 ffmpeg_cmd, "-y", 
                 "-i", self.video_path, 
                 "-i", eng_audio_path,
                 "-c:v", "libx264", 
-                "-c:a", "aac"
-            ]
-            
-            if self.subtitle_var.get():
-                cmd.extend(["-vf", f"subtitles={srt_filename}:force_style='FontSize=18,PrimaryColour=&Hffffff,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=0'"])
-                
-            cmd.extend([
+                "-c:a", "aac",
                 "-map", "0:v:0", "-map", "1:a:0",
                 final_video_path
-            ])
+            ]
             
             try:
                 subprocess.run(cmd, cwd=output_dir, check=True, capture_output=True, text=True)
             except subprocess.CalledProcessError as e:
                 raise Exception(f"Erro ao gerar vídeo final: {e.stderr}")
             
-            self.update_progress(1.0, "Concluído! Vídeo salvo na mesma pasta.")
-            messagebox.showinfo("Sucesso", f"Vídeo dublado salvo em:\n{final_video_path}")
+            self.update_progress(1.0, "Concluído! Pasta criada com sucesso.")
+            messagebox.showinfo("Sucesso", f"Vídeo e legendas salvos em:\n{result_dir}")
             
         except Exception as e:
             self.update_progress(0, f"Erro: {str(e)}")
@@ -282,9 +278,6 @@ class VideoTranslatorApp(ctk.CTk):
                 except: pass
             if os.path.exists(eng_audio_path): 
                 try: os.remove(eng_audio_path)
-                except: pass
-            if os.path.exists(srt_path): 
-                try: os.remove(srt_path)
                 except: pass
             for f in temp_files:
                 if os.path.exists(f):
