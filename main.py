@@ -201,7 +201,7 @@ class VideoTranslatorApp(ctk.CTk):
             
             if audio_clips:
                 final_audio = CompositeAudioClip(audio_clips)
-                final_audio.write_audiofile(eng_audio_path, logger=None)
+                final_audio.write_audiofile(eng_audio_path, fps=44100, logger=None)
                 final_audio.close()
                 for c in audio_clips:
                     c.close()
